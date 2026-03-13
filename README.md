@@ -37,7 +37,8 @@ Then run in the same console:
 
 
 # How the Installer Works
-## Supported Games
+
+ ## Supported Games
 The script supports all three Batman Arkham games:
 
 **Batman Arkham Knight — DLC folder installation**
