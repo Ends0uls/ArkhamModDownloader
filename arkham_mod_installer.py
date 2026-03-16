@@ -1,10 +1,21 @@
 import os
 import re
-import requests
 import shutil
 import subprocess
+import sys
 import time
-from tqdm import tqdm
+
+# ============================================================
+# AUTO-INSTALL DEPENDENCIES
+# ============================================================
+try:
+    import requests
+    from tqdm import tqdm
+except ImportError:
+    print("[Setup] Missing required packages. Installing 'requests' and 'tqdm'...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "requests", "tqdm"])
+    import requests
+    from tqdm import tqdm
 
 # ============================================================
 # CONFIGURATION
@@ -116,8 +127,9 @@ def get_latest_main_files(files):
     candidates = [f for f in files if classify_file(f) == "main"]
     if not candidates:
         return []
+    # Sort them by ID just in case, newest first, but return ALL of them
     candidates.sort(key=lambda x: x.get("file_id", 0), reverse=True)
-    return [candidates[0]]
+    return candidates
 
 # ============================================================
 # DOWNLOAD & EXTRACTION
