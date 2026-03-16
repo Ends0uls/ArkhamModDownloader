@@ -61,7 +61,7 @@ DL_DELAY  = 1.0
 # SETUP
 # ============================================================
 
-for _dir in [DOWNLOAD_DIR, EXTRACT_DIR]:
+for _dir in [DOWNLOAD_DIR, EXTRACT_DIR, MISC_MODS_DIR]:
     os.makedirs(_dir, exist_ok=True)
 
 session = requests.Session()
@@ -127,12 +127,12 @@ def get_latest_main_files(files):
     candidates = [f for f in files if classify_file(f) == "main"]
     if not candidates:
         return []
-    # Sort them by ID just in case, newest first, but return ALL of them
+    # Sort them by ID, newest first, and return ALL main files
     candidates.sort(key=lambda x: x.get("file_id", 0), reverse=True)
     return candidates
 
 # ============================================================
-# DOWNLOAD & EXTRACTION
+# DOWNLOAD, EXTRACTION & CLEANUP
 # ============================================================
 
 def download_file(url, filename, dest_dir):
@@ -173,7 +173,6 @@ def extract_archive(archive_path):
 
     out_folder = os.path.join(EXTRACT_DIR, archive_name)
     if os.path.exists(out_folder) and os.listdir(out_folder):
-        print(f"  [Skip] Already extracted: {archive_name}")
         return out_folder
 
     os.makedirs(out_folder, exist_ok=True)
@@ -191,6 +190,15 @@ def extract_archive(archive_path):
         print(f"  [Extract] Exception: {archive_name} — {e}")
 
     return out_folder
+
+def cleanup_extracted(extracted_folder):
+    """Deletes the extracted folder to save space after it has been processed."""
+    if extracted_folder and os.path.exists(extracted_folder):
+        try:
+            shutil.rmtree(extracted_folder, ignore_errors=True)
+            print(f"  [Cleanup] Deleted temp folder: {os.path.basename(extracted_folder)}")
+        except Exception as e:
+            print(f"  [Cleanup] Failed to delete {os.path.basename(extracted_folder)}: {e}")
 
 # ============================================================
 # FIND MOD ROOT & STRUCTURE DETECTION
@@ -243,7 +251,6 @@ def find_mod_root_knight(mod_folder):
 def find_mod_root_origins(mod_folder):
     """
     For Origins: find folder that directly contains .upk and .int files.
-    This is the flat structure where files sit directly in the mod root.
     """
     def has_upk_files(path):
         try:
@@ -254,11 +261,9 @@ def find_mod_root_origins(mod_folder):
             pass
         return False
     
-    # Check if current folder has .upk/.int files
     if has_upk_files(mod_folder):
         return mod_folder
     
-    # Check immediate subfolders (one level deep)
     try:
         for item in os.listdir(mod_folder):
             item_path = os.path.join(mod_folder, item)
@@ -338,10 +343,7 @@ def find_city_txt(extracted_folder):
     return None
 
 def parse_playable_characters(txt_path):
-    """
-    Parse .txt file and extract character entries.
-    Captures: BaseId, Name, and the entire raw line for ID substitution.
-    """
+    """Parse .txt file and extract character entries."""
     entries = []
     pattern = re.compile(
         r'\+PlayableCharactersV2=\(.*?BaseId=(\d+).*?Name="([^"]+)"(.*?)\)',
@@ -365,11 +367,7 @@ def parse_playable_characters(txt_path):
     return entries
 
 def edit_pcgame_ini(ini_path, new_entries):
-    """
-    Add character entries to PCGame.ini.
-    Finds highest Id for each BaseId and increments by 1.
-    Uses regex to replace dummy Id (XX) in the raw mod line.
-    """
+    """Add character entries to PCGame.ini."""
     if not os.path.exists(ini_path):
         print(f"  [City] PCGame.ini not found: {ini_path}")
         return False
@@ -381,7 +379,6 @@ def edit_pcgame_ini(ini_path, new_entries):
         print(f"  [City] Error reading ini: {e}")
         return False
 
-    # Pattern to find existing entries in ini
     line_pattern = re.compile(
         r'\+PlayableCharactersV2=\(.*?BaseId=(\d+).*?Id=(\d+).*?Name="([^"]+)"',
         re.IGNORECASE
@@ -392,7 +389,6 @@ def edit_pcgame_ini(ini_path, new_entries):
         mod_name = entry["name"]
         raw_line = entry["raw_line"]
 
-        # Check if already installed
         already_installed = any(
             re.search(rf'Name="{re.escape(mod_name)}"', l, re.IGNORECASE)
             for l in lines
@@ -401,7 +397,6 @@ def edit_pcgame_ini(ini_path, new_entries):
             print(f"  [City] Already in ini: {mod_name} (BaseId={base_id})")
             continue
 
-        # Find highest Id for this BaseId
         highest_id    = -1
         last_line_idx = -1
 
@@ -419,8 +414,6 @@ def edit_pcgame_ini(ini_path, new_entries):
 
         new_id = highest_id + 1
         
-        # Replace Id=XX (or similar) with actual Id=<new_id>
-        # This regex handles: Id=XX, Id=#, Id=0, etc.
         new_line_str = re.sub(
             r'(?i)(\bId\s*=\s*)[^,\)]+',
             rf'\g<1>{new_id}',
@@ -493,12 +486,13 @@ def install_misc(extracted_folder, game_config):
         print(f"  [Misc] Failed: {e}")
 
 def install_optional_misc(archive_path, game_config):
-    """Extract and store optional file"""
+    """Extract, store optional file, and cleanup"""
     extracted = extract_archive(archive_path)
     if not extracted:
         return
 
     install_misc(extracted, game_config)
+    cleanup_extracted(extracted)
 
 # ============================================================
 # PROCESS MOD
@@ -558,10 +552,10 @@ def process_mod(nexus_slug, mod_id, game_config, global_upk_registry):
         # City: merge BmGame + edit ini
         if game_type == "city":
             install_mod_city(extracted_folder, game_config)
+            cleanup_extracted(extracted_folder)
         
         # Knight / Origins: find mod root and install
         else:
-            # Get the actual mod folder (1 level into extraction)
             mod_folder = find_immediate_mod_root(extracted_folder)
             
             if game_type == "knight":
@@ -572,6 +566,7 @@ def process_mod(nexus_slug, mod_id, game_config, global_upk_registry):
             if not mod_root:
                 print(f"  [!] Could not detect mod structure → misc")
                 install_misc(extracted_folder, game_config)
+                cleanup_extracted(extracted_folder)
                 continue
 
             upks      = get_upk_files(mod_root)
@@ -585,6 +580,9 @@ def process_mod(nexus_slug, mod_id, game_config, global_upk_registry):
                 success = install_mod_dlc(mod_root, dlc_install)
                 if success:
                     global_upk_registry.update(upks)
+            
+            # Delete the extracted folder after copying is complete
+            cleanup_extracted(extracted_folder)
 
 # ============================================================
 # MAIN
